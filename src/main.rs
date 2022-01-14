@@ -1,13 +1,9 @@
-use chrono::DateTime;
+use chrono::{DateTime, Timelike, Utc, TimeZone, Datelike, FixedOffset};
 use futures_lite::*;
-use hyper::body::Buf;
 use lapin::{options::*, types::FieldTable, BasicProperties, Connection, ConnectionProperties};
-use mongodb::bson::de::Result;
-use mongodb::error::Error;
 use redis::{Commands, RedisError};
 use serde::{Deserialize, Serialize};
-use std::{env, thread, time, str, vec};
-use mongodb::{Client, Collection};
+use std::{env, thread, time, str};
 use mongodb::bson::{doc};
 
 
@@ -16,6 +12,7 @@ const RABBIT_CON_STRING: &str = "RABBIT_CON_STRING";
 const MONGODB_CON_STRING: &str = "MONGODB_CON_STRING";
 const MONGODB: &str = "povorotdb";
 const MONGODB_REQUEST_COLLECTION: &str = "requests";
+const COUNT_REQUEST: usize = 3;
 
 #[tokio::main]
 async fn main() {
@@ -38,6 +35,8 @@ async fn main() {
             )
             .await
             .unwrap();
+        let _saved_queue = channel
+            .queue_declare("request-notification", QueueDeclareOptions::default(), FieldTable::default());
         let mut consumer = channel
             .basic_consume(
                 "save-requests",
@@ -61,7 +60,16 @@ async fn main() {
 
                 let text = str::from_utf8(&delivery.data).unwrap();
                 let save_request: RequestSignupDto = serde_json::from_str(text).unwrap();
-                let filter = doc! {"planed_at" : &save_request.date};
+                let mut save_date = DateTime::parse_from_rfc3339(&save_request.date).unwrap();
+                let minute = save_date.time().minute();
+                if minute != 0 {
+                    let dt = Utc.ymd(save_date.year(), save_date.month(), save_date.day())
+                    .and_hms(save_date.hour(), 0, 0);
+                    
+                    save_date = DateTime::parse_from_rfc3339(&dt.format("%Y-%m-%dT%H:%M:%SZ").to_string()).unwrap();
+                }
+                println!("{}", &save_date);
+                let filter = doc! {"planed_at" : &save_date.format("%d.%m.%YT%H:%M:%S").to_string()};
                 let request_collection = mongo_client
                     .database(MONGODB)
                     .collection::<RequestSignup>(MONGODB_REQUEST_COLLECTION)
@@ -69,18 +77,35 @@ async fn main() {
                     .await
                     .expect("Error get cursor");
                 let c: usize  = request_collection.count().await;
-                if c < 3 {
+                if c < COUNT_REQUEST {
                     let request = RequestSignup {
                         id: Option::Some(mongodb::bson::oid::ObjectId::new()),
                         car: save_request.car,
                         phone: save_request.phone,
                         description: save_request.description,
-                        planed_at: save_request.date,
+                        planed_at: save_date.format("%d.%m.%YT%H:%M:%S").to_string(),
                     };
                     let _ = mongo_client
                     .database(MONGODB)
                     .collection::<RequestSignup>(MONGODB_REQUEST_COLLECTION)
                     .insert_one(request, None).await;
+                    let _confirm = channel
+                        .basic_publish("", 
+                        "request-notification", 
+                        BasicPublishOptions::default(),
+                                    delivery.data,
+                                    BasicProperties::default(),)
+                        .await
+                        .expect("faild publish")
+                        .await
+                        .expect("faild confirm");
+                } else {
+                    let mut con = connect().unwrap();
+                    
+                    let _: usize = con.lrem(save_date.format("%d.%m.%Y").to_string(),
+                    1,
+                    &save_date.format("%d.%m.%YT%H-%M").to_string())
+                    .unwrap();
                 }
                 println!("{:#?}", &c);
             }
@@ -90,6 +115,12 @@ async fn main() {
             thread::sleep(time::Duration::from_millis(1));
         }
     });
+}
+
+fn connect() -> Result<redis::Connection, RedisError> {
+    let con_str = env::var(REDIS_CON_STRING).unwrap_or_else(|_| "redis://127.0.0.1/".into());
+    let client = redis::Client::open(con_str)?;
+    Ok(client.get_connection()?)
 }
 
 #[derive(Debug, Deserialize, Serialize)]
