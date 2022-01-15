@@ -1,4 +1,4 @@
-use chrono::{DateTime, Timelike, Utc, TimeZone, Datelike, FixedOffset};
+use chrono::{DateTime, Timelike, Utc, TimeZone, Datelike};
 use futures_lite::*;
 use lapin::{options::*, types::FieldTable, BasicProperties, Connection, ConnectionProperties};
 use redis::{Commands, RedisError};
@@ -27,6 +27,7 @@ async fn main() {
         .await
         .unwrap();
         let channel = conn.create_channel().await.unwrap();
+
         let _queue = channel
             .queue_declare(
                 "save-requests",
@@ -35,8 +36,10 @@ async fn main() {
             )
             .await
             .unwrap();
+
         let _saved_queue = channel
             .queue_declare("request-notification", QueueDeclareOptions::default(), FieldTable::default());
+
         let mut consumer = channel
             .basic_consume(
                 "save-requests",
@@ -45,7 +48,7 @@ async fn main() {
                 FieldTable::default(),
             )
             .await
-            .expect("basic consume");
+            .expect("consume save request faild");
 
         let mongo_client = mongodb::Client::with_uri_str(mongodb_con_str)
             .await
