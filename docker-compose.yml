@@ -1,0 +1,16 @@
+version: '3.7'
+
+networks:
+  resources:
+    external: true
+
+services:
+  requester:
+    build: .
+    environment:
+      - REDIS_CON_STRING=redis://redis
+      - RABBIT_CON_STRING=amqp://guest:guest@rabbitmq
+      - MONGODB_CON_STRING=mongodb://mongodb
+    networks:
+      - resources
+    restart: always
