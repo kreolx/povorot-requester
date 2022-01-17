@@ -5,6 +5,7 @@ use redis::{Commands, RedisError};
 use serde::{Deserialize, Serialize};
 use std::{env, thread, time, str};
 use mongodb::bson::{doc};
+use tokio::runtime::Runtime;
 
 
 const REDIS_CON_STRING: &str = "REDIS_CON_STRING";
@@ -53,8 +54,10 @@ async fn main() {
         let mongo_client = mongodb::Client::with_uri_str(mongodb_con_str)
             .await
             .expect("Faild to create MongoDb client");
+
+        let rt = Runtime::new().unwrap();
         
-        async_global_executor::spawn(async move {
+        let _ = rt.spawn(async move {
             while let Some(delivery) = consumer.next().await {
                 let (_, delivery) = delivery.expect("error in consumer");
                 delivery.ack(BasicAckOptions::default())
@@ -113,10 +116,7 @@ async fn main() {
                 println!("{:#?}", &c);
             }
         })
-        .detach();
-        loop {
-            thread::sleep(time::Duration::from_millis(1));
-        }
+        .await;
     });
 }
 
